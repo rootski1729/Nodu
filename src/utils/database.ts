@@ -1,78 +1,93 @@
-import { Task, TaskStatus, TaskQueryParams, PaginatedResponse } from '../types';
+import { TaskModel, ITask } from '../models/Task';
+import { TaskStatus, TaskQueryParams, PaginatedResponse, CreateTaskRequest, UpdateTaskRequest } from '../types';
 
-class InMemoryDatabase {
-  private tasks: Task[] = [];
-
-  create(task: Task): Task {
-    this.tasks.push(task);
-    return task;
-  }
-
-
-  findAll(params: TaskQueryParams = {}): PaginatedResponse<Task> {
-    let filteredTasks = [...this.tasks];
-
-    if (params.status) {
-      filteredTasks = filteredTasks.filter(task => task.status === params.status);
+export class Database {
+  static async create(taskData: CreateTaskRequest): Promise<ITask> {
+    try {
+      const task = new TaskModel(taskData);
+      return await task.save();
+    } catch (error) {
+      throw new Error(`Failed to create task: ${error}`);
     }
+  }
 
-    if (params.search) {
-      const searchTerm = params.search.toLowerCase();
-      filteredTasks = filteredTasks.filter(
-        task =>
-          task.title.toLowerCase().includes(searchTerm) ||
-          task.description.toLowerCase().includes(searchTerm)
-      );
+  static async findAll(params: TaskQueryParams = {}): Promise<PaginatedResponse<ITask>> {
+    try {
+      const page = params.page || 1;
+      const limit = Math.min(params.limit || 10, 100);
+      const skip = (page - 1) * limit;
+      const query: any = {};
+      if (params.status) {
+        query.status = params.status;
+      }
+      if (params.search) {
+        query.$or = [
+          { title: { $regex: params.search, $options: 'i' } },
+          { description: { $regex: params.search, $options: 'i' } },
+        ];
+      }
+      const [tasks, total] = await Promise.all([
+        TaskModel.find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        TaskModel.countDocuments(query),
+      ]);
+      return {
+        data: tasks as ITask[],
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    } catch (error) {
+      throw new Error(`Failed to fetch tasks: ${error}`);
     }
-
-    filteredTasks.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-
-    const page = params.page || 1;
-    const limit = params.limit || 10;
-    const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + limit;
-    const paginatedTasks = filteredTasks.slice(startIndex, endIndex);
-
-    return {
-      data: paginatedTasks,
-      total: filteredTasks.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filteredTasks.length / limit),
-    };
   }
 
-  findById(id: string): Task | undefined {
-    return this.tasks.find(task => task.id === id);
-  }
-
-  updateById(id: string, updates: Partial<Task>): Task | null {
-    const taskIndex = this.tasks.findIndex(task => task.id === id);
-    if (taskIndex === -1) {
-      return null;
+  static async findById(id: string): Promise<ITask | null> {
+    try {
+      return await TaskModel.findOne({ id }).lean();
+    } catch (error) {
+      throw new Error(`Failed to find task: ${error}`);
     }
-
-    this.tasks[taskIndex] = { ...this.tasks[taskIndex], ...updates, updatedAt: new Date() };
-    return this.tasks[taskIndex];
   }
 
-  deleteById(id: string): boolean {
-    const taskIndex = this.tasks.findIndex(task => task.id === id);
-    if (taskIndex === -1) {
-      return false;
+  static async updateById(id: string, updates: UpdateTaskRequest): Promise<ITask | null> {
+    try {
+      return await TaskModel.findOneAndUpdate(
+        { id },
+        { ...updates, updatedAt: new Date() },
+        { new: true, runValidators: true }
+      ).lean();
+    } catch (error) {
+      throw new Error(`Failed to update task: ${error}`);
     }
-
-    this.tasks.splice(taskIndex, 1);
-    return true;
   }
 
-  count(): number {
-    return this.tasks.length;
+  static async deleteById(id: string): Promise<boolean> {
+    try {
+      const result = await TaskModel.deleteOne({ id });
+      return result.deletedCount > 0;
+    } catch (error) {
+      throw new Error(`Failed to delete task: ${error}`);
+    }
   }
 
-  clear(): void {
-    this.tasks = [];
+  static async count(): Promise<number> {
+    try {
+      return await TaskModel.countDocuments();
+    } catch (error) {
+      throw new Error(`Failed to count tasks: ${error}`);
+    }
+  }
+
+  static async clear(): Promise<void> {
+    try {
+      await TaskModel.deleteMany({});
+    } catch (error) {
+      throw new Error(`Failed to clear tasks: ${error}`);
+    }
   }
 }
-
-export const database = new InMemoryDatabase();
